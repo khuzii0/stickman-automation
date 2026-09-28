@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -13,8 +14,6 @@ from ..config import settings
 from ..models import StoryBoard
 
 log = logging.getLogger("stickman_studio.phase2")
-
-_NEGATIVE = "color, photorealistic, 3d render, shadows, gradients, text, watermark, clutter, detailed illustration, shading"
 
 
 def _build_prompt(board: StoryBoard, scene_prompt: str) -> str:
@@ -27,7 +26,7 @@ def _build_prompt(board: StoryBoard, scene_prompt: str) -> str:
 
 
 def _pollinations_image(prompt: str, output_path: Path) -> None:
-    """Best-effort free image endpoint; supports an API key when available."""
+    """Best-effort image generation through the Pollinations endpoint."""
     encoded = quote(prompt, safe="")
     url = f"https://image.pollinations.ai/prompt/{encoded}"
     params = {
@@ -59,8 +58,8 @@ def _pollinations_image(prompt: str, output_path: Path) -> None:
     raise RuntimeError(f"Image generation failed after retries: {last_error}") from last_error
 
 
-def _placeholder_image(prompt: str, output_path: Path) -> None:
-    """Create a deterministic local fallback when no remote image provider is usable."""
+def _placeholder_image(output_path: Path) -> None:
+    """Local fallback that keeps the pipeline operational if an image API is unavailable."""
     from PIL import Image, ImageDraw
 
     image = Image.new("RGB", (settings.image_width, settings.image_height), "white")
@@ -74,7 +73,6 @@ def _placeholder_image(prompt: str, output_path: Path) -> None:
     draw.line((cx, cy + 120, cx - 120, cy + 260), fill="black", width=5)
     draw.line((cx, cy + 120, cx + 120, cy + 260), fill="black", width=5)
     image.save(output_path, format="PNG")
-    log.warning("Used local stickman placeholder because remote image generation failed: %s", prompt[:80])
 
 
 def run(board: StoryBoard, project_dir: Path) -> StoryBoard:
@@ -94,12 +92,13 @@ def run(board: StoryBoard, project_dir: Path) -> StoryBoard:
         log.info("Phase 2: image %d/%d — %s", scene.index + 1, len(board.scenes), scene.title)
         try:
             if settings.image_provider == "placeholder":
-                _placeholder_image(prompt, img_path)
+                _placeholder_image(img_path)
             else:
                 _pollinations_image(prompt, img_path)
         except Exception:
             if settings.image_provider == "pollinations" and os.getenv("IMAGE_FALLBACK_PLACEHOLDER", "1") == "1":
-                _placeholder_image(prompt, img_path)
+                log.warning("Remote image generation failed; using local placeholder for scene %d", scene.index)
+                _placeholder_image(img_path)
             else:
                 raise
         scene.image_path = str(img_path)
