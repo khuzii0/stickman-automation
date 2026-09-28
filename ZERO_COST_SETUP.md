@@ -4,13 +4,11 @@ This branch provides a default pipeline that does **not** require Google Cloud b
 
 ## Pipeline
 
-`Gemini API -> image provider -> edge-tts -> FFmpeg Ken Burns slideshow -> final.mp4`
+`LLM router (Gemini -> Groq -> OpenRouter) -> image provider -> edge-tts -> FFmpeg Ken Burns slideshow -> final.mp4`
 
 The optional Veo/Vertex animation path remains available only when GCP credentials and billing are configured.
 
 ## 1. Install
-
-From the repository root:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
@@ -18,80 +16,71 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-FFmpeg must be available on PATH:
+FFmpeg must be on PATH.
 
-```powershell
-ffmpeg -version
-ffprobe -version
-```
+## 2. Configure at least one LLM
 
-## 2. Configure Gemini
+Copy `.env.example` to `.env`.
 
-Copy `.env.example` to `.env` and set:
+Recommended resilient setup:
 
 ```env
+LLM_PROVIDERS=gemini,groq,openrouter
 GEMINI_API_KEY=your_google_ai_studio_key
-GEMINI_MODEL=gemini-2.5-flash
-IMAGE_PROVIDER=pollinations
-IMAGE_FALLBACK_PLACEHOLDER=1
-SCENE_COUNT=4
+GEMINI_MODEL=gemini-3.8-flash
+GROQ_API_KEY=your_groq_key
+GROQ_MODEL=openai/gpt-oss-20b
+OPENROUTER_API_KEY=your_openrouter_key
+OPENROUTER_MODEL=openrouter/free
 ```
 
-The Gemini key is an AI Studio API key, not a Vertex service-account credential.
+Providers are tried from left to right. A missing key is skipped. If Gemini returns 503, invalid output, or another error, Phase 1 automatically tries Groq, then OpenRouter.
+
+You do not need all three keys. For the strongest outage protection, configure at least two independent providers.
+
+Never commit or paste your real API keys into GitHub or chat.
 
 ## 3. First test
-
-Use a short video with four scenes:
 
 ```powershell
 python orchestrator.py "Why the sky is blue" --scenes 4 --video-mode slideshow
 ```
 
-The output is under:
+Watch for a log line such as:
 
 ```text
-projects\why-the-sky-is-blue\final.mp4
+Trying LLM provider gemini (...)
+LLM provider gemini failed; falling back.
+Trying LLM provider groq (...)
+LLM provider groq succeeded.
 ```
 
-## 4. Zero-cost requirements
+The output is under `projects\why-the-sky-is-blue\final.mp4`.
 
-Do **not** set these for the default slideshow pipeline:
+## 4. Provider notes
 
-```env
-GCP_PROJECT_ID=
-GOOGLE_APPLICATION_CREDENTIALS=
-GCS_STAGING_BUCKET=
-```
+- Gemini remains first by default, but it is no longer a single point of failure.
+- Groq uses its OpenAI-compatible chat-completions API.
+- OpenRouter uses `openrouter/free`, which routes to an available zero-cost model.
+- Provider/model availability and free limits can change. Keep model IDs in `.env`, not hardcoded in application logic.
+- Phase 1 validates the returned JSON and exact scene count before accepting a provider response.
 
-Do not use:
+## 5. Zero-cost requirements
 
-```powershell
---video-mode animation
---upload
-```
+Do not configure GCP/Vertex fields for slideshow mode. Do not use `--video-mode animation` or `--upload` for the zero-cost path.
 
-`animation` is the optional Vertex/Veo path. `--upload` is deliberately disabled in this branch because it means GCS upload, which is not part of the zero-cost pipeline.
+## 6. Image provider caveat
 
-## 5. Image provider caveat
+`IMAGE_PROVIDER=pollinations` is a remote best-effort image endpoint. The local placeholder fallback keeps pipeline testing possible if it is unavailable.
 
-`IMAGE_PROVIDER=pollinations` uses a remote image-generation endpoint. Availability, authentication requirements, rate limits, models, and free access can change. This branch therefore has a local placeholder fallback so the pipeline itself can still be tested without paying for image generation.
+## 7. YouTube upload
 
-For actual YouTube production, verify the current provider's terms and limits before batching large numbers of videos.
+YouTube upload is independent of Vertex AI. Put `client_secrets.json` in the repository root and start with private uploads.
 
-## 6. YouTube upload
+## 8. Laptop load
 
-YouTube upload is independent of Vertex AI. Put a desktop OAuth client file named `client_secrets.json` in the repository root, complete the browser OAuth flow, then use:
+The zero-cost path does not run diffusion models locally. The laptop performs orchestration, downloads, TTS, FFmpeg encoding, and assembly.
 
-```powershell
-python orchestrator.py "Why the sky is blue" --scenes 4 --video-mode slideshow --youtube --privacy private
-```
+## 9. Important limitation
 
-Start with `private`. Do not automatically publish a batch until you have reviewed the generated videos.
-
-## 7. Laptop load
-
-The zero-cost path does not run an image or video diffusion model locally. Your laptop only performs TTS orchestration, image downloads, FFmpeg encoding, and final assembly. FFmpeg slideshow encoding uses `veryfast` and CRF 27 by default to reduce CPU load.
-
-## 8. Important limitation
-
-This branch does not reproduce Veo-quality animation or Imagen subject-reference consistency for free. It is intended to validate the YouTube content-production system cheaply before spending money on premium generation.
+This validates the automation architecture cheaply. Free APIs have no production SLA, so a serious production system should retain multiple providers and graceful failure handling.
