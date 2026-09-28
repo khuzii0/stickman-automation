@@ -21,7 +21,7 @@ Return only valid JSON matching the requested structure. Do not use Markdown fen
 """.strip()
 
 
-def _storyboard_schema() -> dict:
+def _groq_storyboard_schema() -> dict:
     return {
         "type": "object",
         "properties": {
@@ -84,7 +84,6 @@ def _gemini(prompt: str) -> str:
             system_instruction=_SYSTEM_INSTRUCTION,
             max_output_tokens=4096,
             response_mime_type="application/json",
-            response_schema=_storyboard_schema(),
         ),
     )
     return response.text or ""
@@ -137,7 +136,7 @@ def _groq(prompt: str) -> str:
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,
-            "max_tokens": 4096,
+            "max_tokens": 7000,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -165,7 +164,7 @@ def _openrouter(prompt: str) -> str:
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,
-            "max_tokens": 4096,
+            "max_tokens": 7000,
             "response_format": {"type": "json_object"},
         },
     )
