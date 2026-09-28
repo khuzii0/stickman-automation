@@ -32,9 +32,16 @@ def _int(key: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    # Free/default provider configuration
+    # Free/default LLM provider configuration
+    llm_providers: tuple[str, ...]
     gemini_api_key: str
     gemini_model: str
+    groq_api_key: str
+    groq_model: str
+    openrouter_api_key: str
+    openrouter_model: str
+
+    # Image generation
     image_provider: str
     pollinations_api_key: str
     pollinations_model: str
@@ -65,9 +72,20 @@ class Settings:
                 raise ConfigError(f"GOOGLE_APPLICATION_CREDENTIALS points to a missing file: {creds}")
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds
 
+        providers = tuple(
+            p.strip().lower()
+            for p in os.getenv("LLM_PROVIDERS", "gemini,groq,openrouter").split(",")
+            if p.strip()
+        )
+
         return Settings(
+            llm_providers=providers,
             gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip(),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip(),
+            groq_api_key=os.getenv("GROQ_API_KEY", "").strip(),
+            groq_model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b").strip(),
+            openrouter_api_key=os.getenv("OPENROUTER_API_KEY", "").strip(),
+            openrouter_model=os.getenv("OPENROUTER_MODEL", "openrouter/free").strip(),
             image_provider=os.getenv("IMAGE_PROVIDER", "pollinations").strip().lower(),
             pollinations_api_key=os.getenv("POLLINATIONS_API_KEY", "").strip(),
             pollinations_model=os.getenv("POLLINATIONS_MODEL", "flux").strip(),
