@@ -21,27 +21,48 @@ Return only valid JSON matching the requested structure. Do not use Markdown fen
 """.strip()
 
 
+def _storyboard_schema() -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "script": {"type": "string"},
+            "character_reference_prompt": {"type": "string"},
+            "scenes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "scene_prompt": {"type": "string"},
+                        "narration": {"type": "string"},
+                    },
+                    "required": ["title", "scene_prompt", "narration"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["script", "character_reference_prompt", "scenes"],
+        "additionalProperties": False,
+    }
+
+
 def _build_prompt(topic: str, scene_count: int) -> str:
     return f"""TOPIC: {topic!r}
 
-Produce JSON with:
+Produce a storyboard with:
 - script: approximately 500 words of engaging narration
 - character_reference_prompt: a detailed description of the recurring stickman
 - scenes: exactly {scene_count} objects
 
-Each scene object must contain title, scene_prompt, and narration.
+Each scene must contain title, scene_prompt, and narration.
 scene_prompt should describe only action and environment; do not repeat character identity rules.
 The first scene must hook the viewer immediately."""
 
 
 def _strip_json_fence(raw: str) -> str:
     raw = raw.strip()
-    if raw.startswith("'''"):
-        return raw
     if raw.startswith("```"):
-        lines = raw.splitlines()
-        if lines:
-            lines = lines[1:]
+        lines = raw.splitlines()[1:]
         if lines and lines[-1].strip().startswith("```"):
             lines = lines[:-1]
         return "\n".join(lines).strip()
@@ -63,58 +84,101 @@ def _gemini(prompt: str) -> str:
             system_instruction=_SYSTEM_INSTRUCTION,
             max_output_tokens=4096,
             response_mime_type="application/json",
+            response_schema=_storyboard_schema(),
         ),
     )
     return response.text or ""
 
 
-def _openai_compatible(url: str, api_key: str, model: str, prompt: str) -> str:
-    if not api_key:
-        raise RuntimeError("API key is not configured")
-
+def _request_json(url: str, api_key: str, payload: dict) -> dict:
     response = requests.post(
         url,
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
-        json={
-            "model": model,
+        json=payload,
+        timeout=90,
+    )
+    if not response.ok:
+        preview = response.text[:500].replace("\n", " ")
+        raise RuntimeError(f"HTTP {response.status_code}: {preview}")
+    try:
+        return response.json()
+    except requests.exceptions.JSONDecodeError as exc:
+        preview = response.text[:500].replace("\n", " ")
+        raise RuntimeError(
+            f"Provider returned a non-JSON HTTP response (status {response.status_code}): {preview!r}"
+        ) from exc
+
+
+def _message_content(payload: dict) -> str:
+    try:
+        content = payload["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        preview = json.dumps(payload, ensure_ascii=False)[:700]
+        raise RuntimeError(f"Unexpected provider response shape: {preview}") from exc
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("Provider returned empty message content")
+    return content
+
+
+def _groq(prompt: str) -> str:
+    if not settings.groq_api_key:
+        raise RuntimeError("GROQ_API_KEY is not configured")
+
+    payload = _request_json(
+        "https://api.groq.com/openai/v1/chat/completions",
+        settings.groq_api_key,
+        {
+            "model": settings.groq_model,
             "messages": [
                 {"role": "system", "content": _SYSTEM_INSTRUCTION},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,
             "max_tokens": 4096,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "stickman_storyboard",
+                    "strict": True,
+                    "schema": _storyboard_schema(),
+                },
+            },
         },
-        timeout=90,
     )
-    response.raise_for_status()
-    payload = response.json()
-    return payload["choices"][0]["message"]["content"] or ""
-
-
-def _groq(prompt: str) -> str:
-    return _openai_compatible(
-        "https://api.groq.com/openai/v1/chat/completions",
-        settings.groq_api_key,
-        settings.groq_model,
-        prompt,
-    )
+    return _message_content(payload)
 
 
 def _openrouter(prompt: str) -> str:
-    return _openai_compatible(
+    if not settings.openrouter_api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is not configured")
+
+    payload = _request_json(
         "https://openrouter.ai/api/v1/chat/completions",
         settings.openrouter_api_key,
-        settings.openrouter_model,
-        prompt,
+        {
+            "model": settings.openrouter_model,
+            "messages": [
+                {"role": "system", "content": _SYSTEM_INSTRUCTION},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 4096,
+            "response_format": {"type": "json_object"},
+        },
     )
+    return _message_content(payload)
 
 
 def _validate(raw: str, scene_count: int) -> dict:
     raw = _strip_json_fence(raw)
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        preview = raw[:700].replace("\n", " ")
+        raise ValueError(f"invalid JSON output: {exc}; preview={preview!r}") from exc
 
     required = ("script", "character_reference_prompt", "scenes")
     missing = [key for key in required if key not in data]
@@ -130,11 +194,7 @@ def _validate(raw: str, scene_count: int) -> dict:
 
 
 def _generate(prompt: str, scene_count: int) -> tuple[dict, str]:
-    handlers = {
-        "gemini": _gemini,
-        "groq": _groq,
-        "openrouter": _openrouter,
-    }
+    handlers = {"gemini": _gemini, "groq": _groq, "openrouter": _openrouter}
     errors: list[str] = []
 
     for provider in settings.llm_providers:
