@@ -50,11 +50,11 @@ def _build_prompt(topic: str, scene_count: int) -> str:
     return f"""TOPIC: {topic!r}
 
 Produce a storyboard with:
-- script: approximately 500 words of engaging narration
+- script: a concise master narration assembled from the scene narrations; avoid duplicating long text
 - character_reference_prompt: a detailed description of the recurring stickman
 - scenes: exactly {scene_count} objects
 
-Each scene must contain title, scene_prompt, and narration.
+Each scene must contain title, scene_prompt, and narration. Keep each narration around 60-90 words.
 scene_prompt should describe only action and environment; do not repeat character identity rules.
 The first scene must hook the viewer immediately."""
 
@@ -143,7 +143,7 @@ def _groq(prompt: str) -> str:
                 "json_schema": {
                     "name": "stickman_storyboard",
                     "strict": True,
-                    "schema": _storyboard_schema(),
+                    "schema": _groq_storyboard_schema(),
                 },
             },
         },
